@@ -1,0 +1,42 @@
+[project]
+name = "energyplus-rag"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dotenv>=0.9.9",
+    "google-genai>=1.53.0",
+    "gradio>=6.0.2",
+    "mineru[core]>=2.6.6",
+    "pydantic>=2.12.4",
+    "qdrant-client[fastembed]>=1.16.1",
+]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "C4",
+    "UP",
+    "SIM",
+    "RUF",
+    "N",
+]
+
+ignore = [
+    "E501", # Line too long
+    "N805",
+    "N806"
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
