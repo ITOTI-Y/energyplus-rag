@@ -3,6 +3,7 @@ import argparse
 import gradio as gr
 from dotenv import load_dotenv
 
+from src.rag import RAGSystem
 from src.ui import ChatbotUI
 
 load_dotenv()
@@ -15,6 +16,7 @@ def chat_interface(query: str, chatbot: gr.Chatbot, use_hybrid: bool, use_expans
 def init_system(use_rerank: bool = True):
     pass
 
+
 def main():
     parser = argparse.ArgumentParser(description="EnergyPlus-RAG")
     parser.add_argument("--no-rerank", action="store_true",
@@ -25,6 +27,15 @@ def main():
 
     init_system(
         use_rerank=not args.no_rerank,
+    )
+
+    rag_system = RAGSystem()
+    # rag_system.parse(
+    #     pdf_dir="data/",
+    #     output_dir="./output",
+    # )
+    rag_system.chunk(
+        "./output/EngineeringReference/EngineeringReference.json"
     )
 
     ui = ChatbotUI(port=args.port)

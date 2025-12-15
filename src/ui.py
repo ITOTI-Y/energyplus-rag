@@ -92,7 +92,6 @@ class ChatbotUI:
     def launch(self, chat_interface: Callable):
         app = self._create_ui(chat_interface)
         app.launch(
-            theme=self.theme,
             server_name=self.host,
             server_port=self.port,
             share=False,

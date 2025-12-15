@@ -1,4 +1,9 @@
 from pathlib import Path
+from src.chunk import DocumentProcessor, Chunk
+from loguru import logger
+
+from src.parse import parse_pdf
+
 
 class RAGSystem:
     def __init__(
@@ -8,7 +13,7 @@ class RAGSystem:
     ):
         self.top_k = top_k
         self.final_k = final_k
-        pass
+        self.document_processor = DocumentProcessor()
 
     def query(
         self,
@@ -32,10 +37,21 @@ class RAGSystem:
         #     use_hybrid=use_hybrid,
         # )
 
+    def chunk(
+        self,
+        json_file: str,
+    ) -> list[Chunk]:
+        content_list = self.document_processor.load_content_list(json_file)
+        chunks = self.document_processor.process_document(content_list)
+        return chunks
+
     def parse(
             self,
             pdf_dir: str,
-            output_dir: str,
+            output_dir: str | Path,
     ):
-        result = {}
         pdf_files = Path(pdf_dir).glob("*.pdf")
+        for pdf_file in pdf_files:
+            json_file = parse_pdf(pdf_file, output_dir)
+            chunks = self.chunk(json_file)
+            logger.info(f"Chunked {pdf_file} into {len(chunks)} chunks")
