@@ -1,6 +1,6 @@
-import hashlib
 import json
-import re
+import uuid
+from pathlib import Path
 
 from markdownify import markdownify as md
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,7 +12,7 @@ class Chunk(BaseModel):
         validate_assignment=True,
         extra="allow",
     )
-
+    file_name: str = Field(description="The file name of the chunk")
     content: str = Field(description="The content of the chunk")
     chunk_type: str = Field(description="The type of the chunk")
     page_idx: int = Field(description="The page index of the chunk")
@@ -27,18 +27,18 @@ class Chunk(BaseModel):
 
     @property
     def chunk_id(self) -> str:
-        return hashlib.md5(
-            f"{self.page_idx}_{self.bbox}_{self.content[:100]}".encode()
-        ).hexdigest()[:16]
+        content_str = f"{self.page_idx}_{self.bbox}_{self.content[:100]}"
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, content_str))
 
     def to_qdrant_payload(self) -> dict:
         return {
             "content": self.content,
+            "file_name": self.file_name,
             "chunk_type": self.chunk_type,
             "page_idx": self.page_idx,
             "bbox": self.bbox,
             "section_path": self.section_path,
-            "section_name": self.section_path[-1] if self.section_path else None,
+            "section": self.section_path[-1] if self.section_path else None,
             **self.metadata,
         }
 
@@ -46,7 +46,7 @@ class Chunk(BaseModel):
 class TableProcessor:
     @staticmethod
     def parse_html_table(html: str) -> str:
-        markdown = md(html,table_infer_header=True)
+        markdown = md(html, table_infer_header=True)
         return markdown
 
     @staticmethod
@@ -60,6 +60,7 @@ class TableProcessor:
             return ""
         return f"Table: {caption}\n\n{table_body}\n\n{footnote}"
 
+
 class DocumentProcessor:
 
     def __init__(
@@ -72,11 +73,13 @@ class DocumentProcessor:
         self.table_processor = TableProcessor()
         self.section_stack = []
         self.overlap_buffer = []
+        self.file_name: str = ''
 
     def load_content_list(
         self,
         json_path: str
     ) -> list[dict]:
+        self.file_name = Path(json_path).stem
         with open(json_path, encoding="utf-8") as f:
             return json.load(f)
 
@@ -93,7 +96,7 @@ class DocumentProcessor:
                 continue
 
             page_idx = item.get('page_idx', 0)
-            bbox = item.get('bbox', [0,0,0,0])
+            bbox = item.get('bbox', [0, 0, 0, 0])
 
             if item.get('type') == 'text':
                 text = item.get('text', '').strip()
@@ -101,7 +104,8 @@ class DocumentProcessor:
 
                 if text_level is not None:
                     if text_buffer:
-                        chunks.extend(self._flush_text_buffer(text_buffer, last_page))
+                        chunks.extend(self._flush_text_buffer(
+                            text_buffer, last_page))
                         text_buffer = []
 
                     self._update_section_stack(text, text_level)
@@ -116,7 +120,8 @@ class DocumentProcessor:
 
             elif item.get('type') == 'table':
                 if text_buffer:
-                    chunks.extend(self._flush_text_buffer(text_buffer, last_page))
+                    chunks.extend(self._flush_text_buffer(
+                        text_buffer, last_page))
                     text_buffer = []
 
                 table_chunk = self._process_table(item, page_idx, bbox)
@@ -147,15 +152,18 @@ class DocumentProcessor:
         caption = ' '.join(item.get('table_caption', []))
         footnote = ' '.join(item.get('table_footnote', []))
 
-        linearized_table = self.table_processor.linearize_table(table_body, caption, footnote)
+        linearized_table = self.table_processor.linearize_table(
+            table_body, caption, footnote)
 
         if not linearized_table:
             return None
 
-        section_context = ' > '.join(self.section_stack) if self.section_stack else ""
+        section_context = ' > '.join(
+            self.section_stack) if self.section_stack else ""
         enhanced_content = f"Section: {section_context}\n\n{linearized_table}" if section_context else linearized_table
 
         return Chunk(
+            file_name=self.file_name,
             content=enhanced_content,
             chunk_type='table',
             page_idx=page_idx,
@@ -182,28 +190,39 @@ class DocumentProcessor:
             if not item['text']:
                 continue
             if len(text) + len(item['text']) > self.max_chunk_size and text:
-                section = ' > '.join(self.section_stack) if self.section_stack else ""
-                enhanced_content = f"Section: {section}\n\n{text}" if section else text
+                section = ' > '.join(
+                    self.section_stack) if self.section_stack else ""
+                overlap_text = self.overlap_buffer.pop(
+                    0) + "\n\n" if self.overlap_buffer else ""
+                enhanced_content = f"{overlap_text} Section: {section}\n\n{text}" if section else text
                 chunks.append(Chunk(
+                    file_name=self.file_name,
                     content=enhanced_content,
                     chunk_type='text',
                     page_idx=page_idx,
                     bbox=item['bbox'],
                     section_path=self.section_stack.copy(),
                 ))
+                self.overlap_buffer.append(enhanced_content[-self.overlap:]) if len(
+                    enhanced_content) > self.overlap else enhanced_content
                 text = ""
             else:
                 text += f"{item['text']}\n\n"
 
         if text:
-            section = ' > '.join(self.section_stack) if self.section_stack else ""
-            enhanced_content = f"Section: {section}\n\n{text}" if section else text
+            section = ' > '.join(
+                self.section_stack) if self.section_stack else ""
+            overlap_text = self.overlap_buffer.pop(
+                0) + "\n\n" if self.overlap_buffer else ""
+            enhanced_content = f"{overlap_text} Section: {section}\n\n{text}" if section else text
             chunks.append(Chunk(
+                file_name=self.file_name,
                 content=enhanced_content,
                 chunk_type='text',
                 page_idx=page_idx,
                 bbox=item['bbox'],
                 section_path=self.section_stack.copy(),
             ))
-
+            self.overlap_buffer.append(enhanced_content[-self.overlap:]) if len(
+                enhanced_content) > self.overlap else enhanced_content
         return chunks

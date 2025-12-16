@@ -1,41 +1,66 @@
+from collections.abc import Generator
 from pathlib import Path
-from src.chunk import DocumentProcessor, Chunk
-from loguru import logger
 
+from src.chunk import Chunk, DocumentProcessor
+from src.embedding import GeminiEmbeddingModel
 from src.parse import parse_pdf
+from src.vector import QdrantVectorStore
 
 
 class RAGSystem:
     def __init__(
         self,
-        top_k: int = 10,
-        final_k: int = 5,
+        qdrant_url: str,
+        qdrant_api_key: str,
+        qdrant_collection_name: str,
+        gemini_api_key: str,
     ):
-        self.top_k = top_k
-        self.final_k = final_k
         self.document_processor = DocumentProcessor()
+        self.vector_store = QdrantVectorStore(
+            url=qdrant_url,
+            api_key=qdrant_api_key,
+            collection_name=qdrant_collection_name,
+        )
+        self.embedding_model = GeminiEmbeddingModel(api_key=gemini_api_key)
 
-    def query(
+    def search(
         self,
         query: str,
-        use_hybrid: bool,
-        use_query_expansion: bool,
-    ):
-        pass
-        # debug_info = {}
+        top_k: int = 5,
+        chunk_type: str | None = None,
+        score_threshold: float | None = 0.5,
+    ) -> list[dict]:
+        embeddings = self.embedding_model.embed_batch([query])[0]
+        results = self.vector_store.search(
+            embeddings, top_k, chunk_type, score_threshold
+        )
+        return results
 
-        # search_query = query
-        # if use_query_expansion:
-        #     expanded_queries = query_expander.expand_with_synonms(query)
-        #     search_query = " ".join(expanded_queries[:3])
-        #     debug_info["expanded_queries"] = expanded_queries
+    def build_context(
+        self,
+        query: str,
+        top_k: int = 5,
+        chunk_type: str | None = None,
+        score_threshold: float | None = 0.5,
+    ) -> str:
+        results = self.search(query, top_k, chunk_type, score_threshold)
 
-        # retrieval_results = retriever.retrieve(
-        #     query=search_query,
-        #     top_k=self.top_k,
-        #     final_k=self.final_k,
-        #     use_hybrid=use_hybrid,
-        # )
+        if not results:
+            return ""
+
+        context_parts = []
+        for i, result in enumerate(results):
+            section = result.get("section", "Unknown")
+            content = result.get("content", "")
+            score = result.get("score", 0.0)
+            page_idx = result.get("page_idx", "Unknown")
+            file_name = result.get("file_name", "Unknown")
+
+            context_parts.append(
+                f"[Document {i + 1}] (Source: {file_name}, Section: {section}, Page: {page_idx}, Score: {score:.2f})\n\n{content}\n\n---\n\n"
+            )
+
+        return "\n".join(context_parts)
 
     def chunk(
         self,
@@ -46,12 +71,54 @@ class RAGSystem:
         return chunks
 
     def parse(
-            self,
-            pdf_dir: str,
-            output_dir: str | Path,
-    ):
-        pdf_files = Path(pdf_dir).glob("*.pdf")
-        for pdf_file in pdf_files:
-            json_file = parse_pdf(pdf_file, output_dir)
-            chunks = self.chunk(json_file)
-            logger.info(f"Chunked {pdf_file} into {len(chunks)} chunks")
+        self,
+        pdf_dir: str,
+        output_dir: str | Path,
+    ) -> Generator[str, None, None]:
+        pdf_files = list(Path(pdf_dir).glob("*.pdf"))
+        total_files = len(pdf_files)
+
+        for i, pdf_file in enumerate(pdf_files):
+            yield f"Parsing {pdf_file.name} ({i + 1}/{total_files})"
+
+            json_file = ""
+            for progress_msg in parse_pdf(pdf_file, output_dir):
+                if progress_msg.startswith("RESULT:"):
+                    json_file = progress_msg[7:]
+                else:
+                    yield progress_msg
+
+            yield f"Chunking {json_file}..."
+            try:
+                chunks = self.chunk(json_file)
+                yield f"Chunked {json_file} into {len(chunks)} chunks"
+            except Exception as e:
+                yield f"Error chunking {json_file}: {e!s}"
+                continue
+
+            yield f"Embedding {json_file}..."
+            try:
+                embeddings = self.embed([chunk.content for chunk in chunks])
+                yield f"Embedded {json_file} into {len(embeddings)} embeddings"
+            except Exception as e:
+                yield f"Error embedding {json_file}: {e!s}"
+                continue
+
+            yield f"Adding {json_file} to vector store..."
+            try:
+                self.vector_store.add(chunks, embeddings)
+                yield f"Added {json_file} to vector store"
+            except Exception as e:
+                yield f"Error adding {json_file} to vector store: {e!s}"
+                continue
+
+            yield f"{pdf_file.name} parsed and added to vector store"
+
+        yield f"All {total_files} PDF files parsed and added to vector store"
+
+    def embed(
+        self,
+        texts: list[str],
+    ) -> list[list[float]]:
+        result = self.embedding_model.embed_batch(texts)
+        return result
