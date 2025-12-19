@@ -108,6 +108,22 @@ def main():
     finally:
         model.close()
 
+def data_preprocess(out_put_dir: str):
+    from pathlib import Path
+    rag_system = RAGSystem(
+        qdrant_url=QDRANT_ENDPOINT or "",
+        qdrant_api_key=QDRANT_API_KEY or "",
+        qdrant_collection_name=QDRANT_COLLECTION_NAME or "",
+        gemini_api_key=GEMINI_API_KEY or "",
+    )
+    json_files = Path(out_put_dir).glob("*/*.json")
+
+    for json_file in json_files:
+        chunks = rag_system.chunk(str(json_file))
+        embeddings = rag_system.embed([chunk.content for chunk in chunks])
+        rag_system.vector_store.add(chunks, embeddings)
+    pass
 
 if __name__ == "__main__":
+    # data_preprocess("./output")
     main()

@@ -48,7 +48,7 @@ class GeminiEmbeddingModel(IEmbeddingModel):
 
         values = []
         for batched_texts in range(0, len(texts), 100):
-            sleep(1)
+            sleep(2)
             result = self.client.models.embed_content(
                 model=self.model_name,
                 contents=texts[batched_texts:min(batched_texts+100, len(texts))],  # type: ignore
